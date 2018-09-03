@@ -1,41 +1,36 @@
 %% Global Inputs
 clear all;
+close all;
 
 N_stations = 25; % Number of Stations
 
-%Film Inputs
-load('C:\Users\louay\Desktop\SMERC\r_fi_1005.mat'); %Load Film Mixture Ratios
-load('C:\Users\louay\Desktop\SMERC\film_status_1005.mat'); %Load Film Status
 FCP = 30;
 
+load('C:\Users\louay\Desktop\SMERC\r_fi_350.mat'); %Load Film Mixture Ratios
+load('C:\Users\louay\Desktop\SMERC\film_status_350.mat'); %Load Film Status
+
 %Cooling Inputs
-m_dot_f = 1.54496;      % fuel mass flow rate (lb/s)
+m_dot_f = .53285;      % fuel mass flow rate (lb/s)
 k_avg = 23;        % initial wall thermal conductivity (W/m.K)
-P_co_in(N_stations) = 1000; % coolant pressure entering station (psi)
+P_co_in(N_stations) = 900; % coolant pressure entering station (psi)
 T_co_in(N_stations) = 180; % coolant temperature entering station (R)
 T_cc = 343.8; % methane critical temperature (R)
 g = 386.088583;           % gravitational acceleration (in/s)
 f = .02;            % friction coefficient
-t = .0225;            % wall thickness (in)
+t = .0245;            % wall thickness (in)
 
 %Structural Inputs
-s_y_min = 125000;      % minimum material yield strength (psi)
+s_y_min = 46000;      % minimum material yield strength (psi) (1/2 of yield)
 E = 20000000 ;            % Youngs modulus (psi)
 nu = .284;              % Poissons Ratio
-P_c(1,1:N_stations) = 650;
-%Vector Inputs
-vector_property_table = readtable('C:\Users\louay\Desktop\SMERC\q_rad_q_conv_T_wg_1005.txt');
-vector_property = table2array(vector_property_table);
-q_conv = vector_property(:,1)';
-q_rad = vector_property(:,2)';
-T_wg = vector_property(:,3)';
+P_c(1,1:N_stations) = 670;
 
-N_table = readtable('C:\Users\louay\Desktop\SMERC\N_vector_1005.txt');
+N_table = readtable('C:\Users\louay\Desktop\SMERC\N_vector_350.txt');
 N_array = table2array(N_table);
 N_array = N_array';
 %% Creating Contour
 
-contour_table = readtable('C:\Users\louay\Desktop\SMERC\contour_1005.txt');
+contour_table = readtable('C:\Users\louay\Desktop\SMERC\contour_350.txt');
 contour = table2array(contour_table);
 x = contour(:,1);       % creating stream-wise distance array
 r = contour(:,2);       % creating chamber radius array
@@ -79,7 +74,7 @@ h_c = [];       % coolant convective heat transfer coefficient (BTU/in^2-s-F)
 
 %Structural Variables
 P_crit = [];     % critical buckling pressure (psi)
-s_h_co_ = [];    % coolant hoop stress (psi)
+s_h_co = [];    % coolant hoop stress (psi)
 
 %Output Variables
 C = [];
@@ -105,6 +100,24 @@ for i = N_stations:-1:1
     
 end
 
+for i = 1:N_stations
+    if i == 1
+        x_length_rel(i) = x_length(i);
+    end
+    if i > 1
+        x_length_rel(i) = x_length(i)+x_length_rel(i-1);
+    end
+end
+
+for i = 1:N_stations
+    if i == 1
+        x_length_act(i) = x_length(i)/2;
+    end
+    if i > 1
+        x_length_act(i) = sum(x_length(1,1:i-1)) + (x_length(i)/2);
+    end
+end
+
 %% Section Calculations
 
 % Discretize the geometry based on the number of stations
@@ -119,6 +132,25 @@ end
 
 for i = N_stations:-1:1
     
+    % Find T_wg, q_conv, q_rad
+    name_add = sprintf('s_%i',i);
+    table_name = strcat('C:\Users\louay\Desktop\SMERC\tables\',name_add);
+    heat_table = readtable(table_name);
+    heat = table2array(heat_table);
+    
+    x_rpa = heat(:,1);
+    q_conv_rpa = heat(:,2);
+    q_rad_rpa = heat(:,3);
+    T_wg_rpa = heat(:,4);
+    
+    [x_rpa, index] = unique(x_rpa);
+    
+    q_conv(i) = interp1(x_rpa,q_conv_rpa(index),x_length_act(i),'spline');
+    q_rad(i) = interp1(x_rpa,q_rad_rpa(index),x_length_act(i),'spline');
+    T_wg(i) = interp1(x_rpa,T_wg_rpa(index),x_length_act(i),'spline');
+    
+    % Apply Film Status
+    
     if film_status(i) == 0 || film_status(i) ==1
         q(i) = q_rad(i);
     end
@@ -132,6 +164,8 @@ for i = N_stations:-1:1
         T_co_in(i) = T_co_out(i+1);
     end
 
+    % Wall Transfer Calculations
+    
     T_wc(i) = T_wg(i)-(q(i)*(t/(k_avg*.00001337474527)));
     T_wa(i) = (T_wc(i)+T_wg(i))/2;
     k_w = .015*T_wa + 11.002;
@@ -139,13 +173,14 @@ for i = N_stations:-1:1
     T_wa(i) = (T_wc(i)+T_wg(i))/2;
     dT_w = T_wg - T_wc;
     
-    %Get Data from NIST Thermophysical Workbook website
+    % Get Data from NIST Thermophysical Workbook website
     
     url_string1 = sprintf('https://webbook.nist.gov/cgi/fluid.cgi?Action=Data&Wide=on&ID=C74828&Type=IsoBar&Digits=5&P=%f&THigh=%f&TLow=%f',P_co_in(i),T_co_in(i),T_co_in(i));
     url_string2 = ('&TInc=.1&RefState=DEF&TUnit=R&PUnit=psia&DUnit=lbm%2Fft3&HUnit=Btu%2Flbm&WUnit=ft%2Fs&VisUnit=lbm%2Fft*s&STUnit=lb%2Fin');
     url = strcat(url_string1,url_string2);
 
     filename = 'adastra.txt';
+    options.Timeout = 6000;
     outfilename = websave(filename,url);
     T = readtable(filename);
     delete 'adastra.txt';
@@ -168,15 +203,18 @@ for i = N_stations:-1:1
     C(i) = (.0185*(k_co(i)/h_c(i))*(((4*m_dot_t)/(pi*mu_co(i)))^.8)*(((mu_co(i)*Cp_co(i))/k_co(i))^.4)*((T_co_avg(i)/T_wc(i))^.1))^1.25;
     d(i) = (N_array(i)/C(i))^(1/(-2.25));
     
+    % Fluid Analysis
+    
     V_co(i) = (4*m_dot_t)/(pi*N_array(i)*(d(i)^2)*rho_co(i));
     dP_co(i) = f*(L(i)/d(i))*((rho_co(i)*(V_co(i)^2))/(2*g));
     P_co_out(i) = P_co_in(i) - dP_co(i);
     P_co_avg(i) = (P_co_in(i)+P_co_out(i))/2;
     
-    %Structural
+    %Structural Analysis
     
     s_h_co(i) = (P_co_avg(i)*(d(i)/2))/t;
-    s_h_c(i) = ((P_c(i)*D_avg(i))/t);
+    s_h_c(i) = ((P_c(i)*(D_avg(i)/2))/.12);
+    display(i);
 end
     
 %% Structural Analysis
@@ -187,11 +225,16 @@ for i = 1:N_stations
     P_crit_co(i) = (.855/(1-(nu^2))^(3/4))*(E/(((((D_avg(i)/2)/.1)^(5/2))*(L_channel/(D_avg(i)/2)))));
 end
 
-s_max_h = max(s_h_co)+max(s_h_c);
+s_max_h = (2*max(s_h_co))+max(s_h_c);
+
+RFoS = s_y_min/s_max_h;
+strn = ['Realized FoS for Combined Hoop Stress is ' ,num2str(RFoS)];
+disp(strn);
+
 [P_crit_co_min ,I] = min(P_crit_co);
 
 if P_co_avg(I) >= P_crit_co_min
-    disp('Coolant Pressure Exceeds Critical Pressure!!!\n');
+    disp('Coolant Pressure Exceeds Critical Pressure - ENGINE WILL BUCKLE!!!\n');
     str = ['min Critical Pressure is ', num2str(P_crit_co_min),' at section ', num2str(I)];
     disp(str);
     str2 = ['Coolant Pressure is ' , num2str(P_co_avg(I))];
@@ -199,7 +242,7 @@ if P_co_avg(I) >= P_crit_co_min
 end
 
 if s_max_h >= s_y_min
-    disp('Minimum Yield Stress is Exceeded');
+    disp('Minimum Yield Stress is Exceeded!!!');
     str3 = ['Maximum Hoop Stress is ',num2str(s_max_h)]; 
 end
 
@@ -311,15 +354,6 @@ xlswrite(filename,RESULTS);
 
 %% Plots
 
-for i = 1:N_stations
-    if i == 1
-        x_length_rel(i) = x_length(i);
-    end
-    if i > 1
-        x_length_rel(i) = x_length(i)+x_length_rel(i-1);
-    end
-end
-
 %Heat Flux
 left_color = [0 0 0];
 right_color = [1 0 0];
@@ -331,6 +365,7 @@ ylabel('Radius [in]');
 yyaxis right
 plot(x_length_rel,q,'-.r','linewidth',2);
 ylabel('q_{total} [BTU/in^{2}-s]');
+set(gcf,'color','w');
 
 %Gas side Wall temp
 left_color = [0 0 0];
@@ -343,6 +378,7 @@ ylabel('Radius [in]');
 yyaxis right
 plot(x_length_rel,T_wg,'-.r','linewidth',2);
 ylabel('T_{wg} [R]');
+set(gcf,'color','w');
 
 %Convective Heat Transfer Coefficient (Cooling)
 left_color = [0 0 0];
@@ -355,6 +391,7 @@ ylabel('Radius [in]');
 yyaxis right
 plot(x_length_rel,h_c,'-.r','linewidth',2);
 ylabel('h_{c} [BTU/in^{2}-s-F]');
+set(gcf,'color','w');
 
 %cooling channel diameter
 left_color = [0 0 0];
@@ -367,6 +404,7 @@ ylabel('Radius [in]');
 yyaxis right
 plot(x_length_rel,d,'-.m','linewidth',2);
 ylabel('Cooling Channel Diameter [in]');
+set(gcf,'color','w');
 
 %Coolant pressure
 left_color = [0 0 0];
@@ -379,6 +417,7 @@ ylabel('Radius [in]');
 yyaxis right
 plot(x_length_rel,P_co_avg,'-.b','linewidth',2);
 ylabel('P_{co} [PSI]');
+set(gcf,'color','w');
 
 %coolant Temperature
 left_color = [0 0 0];
@@ -392,6 +431,7 @@ ax.XAxis.Color = 'k';
 yyaxis right
 plot(x_length_rel,T_co_avg,'-.b','linewidth',2);
 ylabel('T_{co} [R]');
+set(gcf,'color','w');
 
 %coolant velocity
 left_color = [0 0 0];
@@ -405,6 +445,7 @@ ax.XAxis.Color = 'k';
 yyaxis right
 plot(x_length_rel,V_co./12,'-.b','linewidth',2);
 ylabel('v_{co} [ft/s]');
+set(gcf,'color','w');
 
 %coolant density
 left_color = [0 0 0];
@@ -418,6 +459,7 @@ ax.XAxis.Color = 'k';
 yyaxis right
 plot(x_length_rel,rho_co.*1728,'-.b','linewidth',2);
 ylabel('\rho_{co} [lb/ft^3]');
+set(gcf,'color','w');
 
 %cooling hoop stress
 left_color = [0 0 0];
@@ -431,6 +473,7 @@ ax.XAxis.Color = 'k';
 yyaxis right
 plot(x_length_rel,s_h_co,'-.k','linewidth',2);
 ylabel('s_{h,co} [PSI]');
+set(gcf,'color','w');
 
 %chamber hoop stress
 left_color = [0 0 0];
@@ -444,3 +487,6 @@ ax.XAxis.Color = 'k';
 yyaxis right
 plot(x_length_rel,s_h_c,'-.k','linewidth',2);
 ylabel('s_{h,c} [PSI]');
+set(gcf,'color','w');
+
+close all;
